@@ -1,0 +1,881 @@
+import moment from "moment-timezone";
+import type { Feature, FeatureCollection, Position } from "geojson";
+import {
+  booleanPointInPolygon,
+  featureCollection,
+  featureEach,
+  point,
+  polygon,
+} from "@turf/turf";
+// @ts-ignore - jsdom does not have type definitions in this project
+import { JSDOM } from "jsdom";
+// @ts-ignore - jquery does not have type definitions in this project
+import jquery from "jquery";
+import {
+  Alert,
+  IngestionConfig,
+  IngestionResult,
+  defaultLogger,
+  resolveFetch,
+  resolveNow,
+} from "nws-alerts-ingest-core";
+
+const SPC_CONV_DAY_12_OUTLOOK_TYPE = {
+  CATEGORICAL: "cat",
+  TORNADO: "torn",
+  SIGNIFICANT_TORNADO: "sigtorn",
+  HAIL: "hail",
+  SIGNIFICANT_HAIL: "sighail",
+  WIND: "wind",
+  SIGNIFICANT_WIND: "sigwind",
+  HTML: "html",
+};
+const SPC_CONV_DAY_3_OUTLOOK_TYPE = {
+  CATEGORICAL: "cat",
+  PROB: "prob",
+  SIGNIFICANT_PROB: "sigprob",
+  HTML: "html",
+};
+
+const SPC_RISKS = {
+  TWO_PERCENT: "0.02",
+  FIVE_PERCENT: "0.05",
+  TEN_PERCENT: "0.10",
+  FIFTEEN_PERCENT: "0.15",
+  THIRTY_PERCENT: "0.30",
+  FOURTY_FIVE_PERCENT: "0.45",
+  SIXTY_PERCENT: "0.60",
+  SIGN: "SIGN",
+  THUNDERSTORM: "TSTM",
+  MARGINAL: "MRGL",
+  SLIGHT: "SLGT",
+  ENHANCED: "ENH",
+  MODERATE: "MDT",
+  HIGH: "HIGH",
+};
+
+type SPC_CONV_OUTLOOK_DAY_12 = {
+  cat?: string;
+  torn?: string;
+  hail?: string;
+  wind?: string;
+  sigtorn?: string;
+  sighail?: string;
+  sigwind?: string;
+  html?: string;
+};
+
+type SPC_CONV_OUTLOOK_DAY_3 = {
+  cat?: string;
+  prob?: string;
+  sigprob?: string;
+  html?: string;
+};
+
+type SPC_CONV_OUTLOOK_DAY_45678 = {
+  prob?: string;
+  html?: string;
+};
+
+type SPC_CONV_OUTLOOK_DAY_12_FEATURES = {
+  cat?: FeatureCollection;
+  torn?: FeatureCollection;
+  hail?: FeatureCollection;
+  wind?: FeatureCollection;
+  sigtorn?: FeatureCollection;
+  sighail?: FeatureCollection;
+  sigwind?: FeatureCollection;
+  html?: string;
+};
+
+type SPC_CONV_OUTLOOK_DAY_3_FEATURES = {
+  cat?: FeatureCollection;
+  prob?: FeatureCollection;
+  sigprob?: FeatureCollection;
+  html?: string;
+};
+
+type SPC_CONV_OUTLOOK_DAY_45678_FEATURES = {
+  prob?: FeatureCollection;
+  html?: string;
+};
+
+const generateOutlookSearchTimes = () => {
+  return {
+    "0100": {
+      START: moment().tz("America/Chicago").utc().hour(0).startOf("hour"),
+      END: moment().tz("America/Chicago").utc().hour(2).startOf("hour"),
+    },
+    "0600": {
+      START: moment().tz("America/Chicago").utc().hour(5).startOf("hour"),
+      END: moment().tz("America/Chicago").utc().hour(7).startOf("hour"),
+    },
+    "0730": {
+      START: moment().tz("America/Chicago").utc().hour(6).startOf("hour"),
+      END: moment().tz("America/Chicago").utc().hour(8).startOf("hour"),
+    },
+    "0900": {
+      START: moment().tz("America/Chicago").utc().hour(8).startOf("hour"),
+      END: moment().tz("America/Chicago").utc().hour(10).startOf("hour"),
+    },
+    "1200": {
+      START: moment().tz("America/Chicago").utc().hour(11).startOf("hour"),
+      END: moment().tz("America/Chicago").utc().hour(13).startOf("hour"),
+    },
+    "1300": {
+      START: moment().tz("America/Chicago").utc().hour(12).startOf("hour"),
+      END: moment().tz("America/Chicago").utc().hour(14).startOf("hour"),
+    },
+    "1630": {
+      START: moment().tz("America/Chicago").utc().hour(15).startOf("hour"),
+      END: moment().tz("America/Chicago").utc().hour(17).startOf("hour"),
+    },
+    "1730": {
+      START: moment().tz("America/Chicago").utc().hour(16).startOf("hour"),
+      END: moment().tz("America/Chicago").utc().hour(18).startOf("hour"),
+    },
+    "1930": {
+      START: moment().tz("America/Chicago").utc().hour(19).startOf("hour"),
+      END: moment().tz("America/Chicago").utc().hour(21).startOf("hour"),
+    },
+    "2000": {
+      START: moment().tz("America/Chicago").utc().hour(19).startOf("hour"),
+      END: moment().tz("America/Chicago").utc().hour(21).startOf("hour"),
+    },
+  };
+};
+
+const getSpcConvDay123GeoJsonUrl = ({
+  day,
+  time,
+  type,
+}: {
+  day: number;
+  time: string;
+  type: string;
+}) => {
+  if (time === "0100") {
+    return `https://www.spc.noaa.gov/products/outlook/archive/${moment()
+      .tz("America/Chicago")
+      .add(1, "day")
+      .format("YYYY")}/day${day}otlk_${moment()
+      .tz("America/Chicago")
+      .add(1, "day")
+      .format("YYYYMMDD")}_${time}_${type}.lyr.geojson`;
+  }
+  return `https://www.spc.noaa.gov/products/outlook/archive/${moment()
+    .tz("America/Chicago")
+    .format("YYYY")}/day${day}otlk_${moment()
+    .tz("America/Chicago")
+    .format("YYYYMMDD")}_${time}_${type}.lyr.geojson`;
+};
+
+const getSpcConvDay45678GeoJsonUrl = ({ day }: { day: number }) => {
+  return `https://www.spc.noaa.gov/products/exper/day4-8/archive/${moment()
+    .tz("America/Chicago")
+    .format("YYYY")}/day${day}prob_${moment()
+    .tz("America/Chicago")
+    .format("YYYYMMDD")}.lyr.geojson`;
+};
+
+const getSpcConvDay123HtmlUrl = ({
+  day,
+  time,
+}: {
+  day: number;
+  time: string;
+}) => {
+  if (time === "0100") {
+    return `https://www.spc.noaa.gov/products/outlook/archive/${moment()
+      .tz("America/Chicago")
+      .add(1, "day")
+      .format("YYYY")}/day${day}otlk_${moment()
+      .tz("America/Chicago")
+      .add(1, "day")
+      .format("YYYYMMDD")}_${time}.html`;
+  }
+  return `https://www.spc.noaa.gov/products/outlook/archive/${moment()
+    .tz("America/Chicago")
+    .format("YYYY")}/day${day}otlk_${moment()
+    .tz("America/Chicago")
+    .format("YYYYMMDD")}_${time}.html`;
+};
+
+const getSpcConvDay45678HtmlUrl = () => {
+  return `https://www.spc.noaa.gov/products/exper/day4-8/archive/${moment()
+    .tz("America/Chicago")
+    .format("YYYY")}/day4-8_${moment()
+    .tz("America/Chicago")
+    .format("YYYYMMDD")}.html`;
+};
+
+const getConvOutlookDay1Urls = (
+  now: moment.Moment,
+): SPC_CONV_OUTLOOK_DAY_12 | undefined => {
+  const outputSearchTimes = generateOutlookSearchTimes();
+  let spcDay1Time: string | undefined;
+
+  if (
+    now.isBetween(
+      outputSearchTimes["1200"].START,
+      outputSearchTimes["1200"].END,
+    )
+  ) {
+    spcDay1Time = "1200";
+  }
+  if (
+    now.isBetween(
+      outputSearchTimes["1300"].START,
+      outputSearchTimes["1300"].END,
+    )
+  ) {
+    spcDay1Time = "1300";
+  }
+  if (
+    now.isBetween(
+      outputSearchTimes["1630"].START,
+      outputSearchTimes["1630"].END,
+    )
+  ) {
+    spcDay1Time = "1630";
+  }
+  if (
+    now.isBetween(
+      outputSearchTimes["2000"].START,
+      outputSearchTimes["2000"].END,
+    )
+  ) {
+    spcDay1Time = "2000";
+  }
+  if (
+    now.isBetween(
+      outputSearchTimes["0100"].START,
+      outputSearchTimes["0100"].END,
+    )
+  ) {
+    spcDay1Time = "0100";
+  }
+
+  if (!spcDay1Time) {
+    return undefined;
+  }
+
+  const urls: SPC_CONV_OUTLOOK_DAY_12 = {};
+  Object.values(SPC_CONV_DAY_12_OUTLOOK_TYPE).forEach((type: string) => {
+    urls[type as keyof SPC_CONV_OUTLOOK_DAY_12] = getSpcConvDay123GeoJsonUrl({
+      day: 1,
+      time: spcDay1Time,
+      type,
+    });
+  });
+  urls.html = getSpcConvDay123HtmlUrl({ day: 1, time: spcDay1Time });
+  return urls;
+};
+
+const getConvOutlookDay2Urls = (
+  now: moment.Moment,
+): SPC_CONV_OUTLOOK_DAY_12 | undefined => {
+  const outputSearchTimes = generateOutlookSearchTimes();
+  let spcDay2Time: string | undefined;
+  if (
+    now.isBetween(
+      outputSearchTimes["0600"].START,
+      outputSearchTimes["0600"].END,
+    )
+  ) {
+    spcDay2Time = "0600";
+  }
+  if (
+    now.isBetween(
+      outputSearchTimes["1730"].START,
+      outputSearchTimes["1730"].END,
+    )
+  ) {
+    spcDay2Time = "1730";
+  }
+  if (!spcDay2Time) {
+    return undefined;
+  }
+
+  const urls: SPC_CONV_OUTLOOK_DAY_12 = {};
+  Object.values(SPC_CONV_DAY_12_OUTLOOK_TYPE).forEach((type: string) => {
+    urls[type as keyof SPC_CONV_OUTLOOK_DAY_12] = getSpcConvDay123GeoJsonUrl({
+      day: 2,
+      time: spcDay2Time,
+      type,
+    });
+  });
+  urls.html = getSpcConvDay123HtmlUrl({ day: 2, time: spcDay2Time });
+  return urls;
+};
+
+const getConvOutlookDay3Urls = (
+  now: moment.Moment,
+): SPC_CONV_OUTLOOK_DAY_3 | undefined => {
+  const outputSearchTimes = generateOutlookSearchTimes();
+  let spcDay3Time: string | undefined;
+  if (
+    now.isBetween(
+      outputSearchTimes["0730"].START,
+      outputSearchTimes["0730"].END,
+    )
+  ) {
+    spcDay3Time = "0730";
+  }
+  if (
+    now.isBetween(
+      outputSearchTimes["1930"].START,
+      outputSearchTimes["1930"].END,
+    )
+  ) {
+    spcDay3Time = "1930";
+  }
+  if (!spcDay3Time) {
+    return undefined;
+  }
+
+  const urls: SPC_CONV_OUTLOOK_DAY_3 = {};
+  Object.values(SPC_CONV_DAY_3_OUTLOOK_TYPE).forEach((type: string) => {
+    urls[type as keyof SPC_CONV_OUTLOOK_DAY_3] = getSpcConvDay123GeoJsonUrl({
+      day: 3,
+      time: spcDay3Time,
+      type,
+    });
+  });
+  urls.html = getSpcConvDay123HtmlUrl({ day: 3, time: spcDay3Time });
+  return urls;
+};
+
+const getConvOutlookDay45678Urls = ({
+  day,
+  now,
+}: {
+  day: number;
+  now: moment.Moment;
+}): SPC_CONV_OUTLOOK_DAY_45678 | undefined => {
+  const outputSearchTimes = generateOutlookSearchTimes();
+  let spcDayTime: string | undefined;
+  if (
+    now.isBetween(
+      outputSearchTimes["0900"].START,
+      outputSearchTimes["0900"].END,
+    )
+  ) {
+    spcDayTime = "0900";
+  }
+  if (!spcDayTime) {
+    return undefined;
+  }
+
+  return {
+    prob: getSpcConvDay45678GeoJsonUrl({ day }),
+    html: getSpcConvDay45678HtmlUrl(),
+  };
+};
+
+const getUrlJson = async (fetchImpl: typeof fetch, url?: string) => {
+  if (!url) return undefined;
+  const response = await fetchImpl(url);
+  if (!response.ok) return undefined;
+  return (await response.json()) as FeatureCollection;
+};
+
+const getUrlText = async (fetchImpl: typeof fetch, url?: string) => {
+  if (!url) return undefined;
+  const response = await fetchImpl(url);
+  if (!response.ok) return undefined;
+  return response.text();
+};
+
+const fixRelativeLinksInSpcHtml = (html?: string) => {
+  const year = moment().tz("America/Chicago").year();
+  return html
+    ?.replace(/href="\//gm, `href="https://www.spc.noaa.gov/`)
+    .replace(/src="\//gm, `src="https://www.spc.noaa.gov/`)
+    .replace(
+      /src="day/gm,
+      `src="https://www.spc.noaa.gov/products/outlook/archive/${year}/day`,
+    );
+};
+
+const fixRelativeLinksInSpcDay45678Html = (html?: string) => {
+  const year = moment().tz("America/Chicago").year();
+  return html
+    ?.replace(/href="\//gm, `href="https://www.spc.noaa.gov/`)
+    .replace(/src="\//gm, `src="https://www.spc.noaa.gov/`)
+    .replace(
+      /src="day/gm,
+      `src="https://www.spc.noaa.gov/products/exper/day4-8/archive/${year}/day`,
+    );
+};
+
+const extractDay45678Table = (html?: string) => {
+  if (!html) return undefined;
+  const dom = new JSDOM(html);
+  const window = dom.window;
+  const $ = jquery(window as any);
+  const nestedTable = $(
+    "body > table:nth-child(5) > tbody > tr > td:nth-child(2) > table:nth-child(4)",
+  );
+  return nestedTable.prop("outerHTML") as string | undefined;
+};
+
+const findHighestCatRisk = ({
+  fc,
+  lat,
+  lon,
+}: {
+  fc: FeatureCollection;
+  lat: number;
+  lon: number;
+}) => {
+  const found = {
+    [SPC_RISKS.THUNDERSTORM]: false,
+    [SPC_RISKS.MARGINAL]: false,
+    [SPC_RISKS.SLIGHT]: false,
+    [SPC_RISKS.ENHANCED]: false,
+    [SPC_RISKS.MODERATE]: false,
+    [SPC_RISKS.HIGH]: false,
+  };
+  const myPoint = point([lon, lat]);
+  featureEach(
+    fc,
+    (feature: Feature & { geometry: { coordinates: Position[][][] } }) => {
+      if (feature?.geometry?.coordinates?.length) {
+        const poly = polygon(feature.geometry.coordinates[0]);
+        if (poly && booleanPointInPolygon(myPoint, poly)) {
+          found[feature.properties?.LABEL] = true;
+        }
+      }
+    },
+  );
+
+  if (found[SPC_RISKS.HIGH]) return SPC_RISKS.HIGH;
+  if (found[SPC_RISKS.MODERATE]) return SPC_RISKS.MODERATE;
+  if (found[SPC_RISKS.ENHANCED]) return SPC_RISKS.ENHANCED;
+  if (found[SPC_RISKS.SLIGHT]) return SPC_RISKS.SLIGHT;
+  if (found[SPC_RISKS.MARGINAL]) return SPC_RISKS.MARGINAL;
+  if (found[SPC_RISKS.THUNDERSTORM]) return SPC_RISKS.THUNDERSTORM;
+  return null;
+};
+
+const findHighestTornRisk = ({
+  fc,
+  lat,
+  lon,
+}: {
+  fc: FeatureCollection;
+  lat: number;
+  lon: number;
+}) => {
+  const found = {
+    [SPC_RISKS.TWO_PERCENT]: false,
+    [SPC_RISKS.FIVE_PERCENT]: false,
+    [SPC_RISKS.TEN_PERCENT]: false,
+    [SPC_RISKS.FIFTEEN_PERCENT]: false,
+    [SPC_RISKS.THIRTY_PERCENT]: false,
+    [SPC_RISKS.FOURTY_FIVE_PERCENT]: false,
+    [SPC_RISKS.SIXTY_PERCENT]: false,
+  };
+  const myPoint = point([lon, lat]);
+  featureEach(
+    fc,
+    (feature: Feature & { geometry: { coordinates: Position[][][] } }) => {
+      if (feature?.geometry?.coordinates?.length) {
+        const poly = polygon(feature.geometry.coordinates[0]);
+        if (poly && booleanPointInPolygon(myPoint, poly)) {
+          found[feature.properties?.LABEL] = true;
+        }
+      }
+    },
+  );
+
+  if (found[SPC_RISKS.SIXTY_PERCENT]) return SPC_RISKS.SIXTY_PERCENT;
+  if (found[SPC_RISKS.FOURTY_FIVE_PERCENT])
+    return SPC_RISKS.FOURTY_FIVE_PERCENT;
+  if (found[SPC_RISKS.THIRTY_PERCENT]) return SPC_RISKS.THIRTY_PERCENT;
+  if (found[SPC_RISKS.FIFTEEN_PERCENT]) return SPC_RISKS.FIFTEEN_PERCENT;
+  if (found[SPC_RISKS.TEN_PERCENT]) return SPC_RISKS.TEN_PERCENT;
+  if (found[SPC_RISKS.FIVE_PERCENT]) return SPC_RISKS.FIVE_PERCENT;
+  if (found[SPC_RISKS.TWO_PERCENT]) return SPC_RISKS.TWO_PERCENT;
+  return null;
+};
+
+const findHighestHailWindRisk = ({
+  fc,
+  lat,
+  lon,
+}: {
+  fc: FeatureCollection;
+  lat: number;
+  lon: number;
+}) => {
+  const found = {
+    [SPC_RISKS.FIVE_PERCENT]: false,
+    [SPC_RISKS.FIFTEEN_PERCENT]: false,
+    [SPC_RISKS.THIRTY_PERCENT]: false,
+    [SPC_RISKS.FOURTY_FIVE_PERCENT]: false,
+    [SPC_RISKS.SIXTY_PERCENT]: false,
+  };
+  const myPoint = point([lon, lat]);
+  featureEach(
+    fc,
+    (feature: Feature & { geometry: { coordinates: Position[][][] } }) => {
+      if (feature?.geometry?.coordinates?.length) {
+        const poly = polygon(feature.geometry.coordinates[0]);
+        if (poly && booleanPointInPolygon(myPoint, poly)) {
+          found[feature.properties?.LABEL] = true;
+        }
+      }
+    },
+  );
+
+  if (found[SPC_RISKS.SIXTY_PERCENT]) return SPC_RISKS.SIXTY_PERCENT;
+  if (found[SPC_RISKS.FOURTY_FIVE_PERCENT])
+    return SPC_RISKS.FOURTY_FIVE_PERCENT;
+  if (found[SPC_RISKS.THIRTY_PERCENT]) return SPC_RISKS.THIRTY_PERCENT;
+  if (found[SPC_RISKS.FIFTEEN_PERCENT]) return SPC_RISKS.FIFTEEN_PERCENT;
+  if (found[SPC_RISKS.FIVE_PERCENT]) return SPC_RISKS.FIVE_PERCENT;
+  return null;
+};
+
+const findHighestSigRisk = ({
+  fc,
+  lat,
+  lon,
+}: {
+  fc: FeatureCollection;
+  lat: number;
+  lon: number;
+}) => {
+  const found = {
+    [SPC_RISKS.SIGN]: false,
+  };
+  const myPoint = point([lon, lat]);
+  featureEach(
+    fc,
+    (feature: Feature & { geometry: { coordinates: Position[][][] } }) => {
+      if (feature?.geometry?.coordinates?.length) {
+        const poly = polygon(feature.geometry.coordinates[0]);
+        if (poly && booleanPointInPolygon(myPoint, poly)) {
+          found[feature.properties?.LABEL] = true;
+        }
+      }
+    },
+  );
+
+  if (found[SPC_RISKS.SIGN]) return SPC_RISKS.SIGN;
+  return null;
+};
+
+export const ingest = async (
+  config: IngestionConfig,
+): Promise<IngestionResult<Record<string, unknown>>> => {
+  const logger = config.logger ?? defaultLogger;
+  const fetchImpl = resolveFetch(config);
+  const now = moment(resolveNow(config)).tz("America/Chicago").utc();
+
+  const day1Urls = getConvOutlookDay1Urls(now);
+  const day2Urls = getConvOutlookDay2Urls(now);
+  const day3Urls = getConvOutlookDay3Urls(now);
+  const day4Urls = getConvOutlookDay45678Urls({ day: 4, now });
+  const day5Urls = getConvOutlookDay45678Urls({ day: 5, now });
+  const day6Urls = getConvOutlookDay45678Urls({ day: 6, now });
+  const day7Urls = getConvOutlookDay45678Urls({ day: 7, now });
+  const day8Urls = getConvOutlookDay45678Urls({ day: 8, now });
+
+  const day1 = day1Urls
+    ? {
+        cat: await getUrlJson(fetchImpl, day1Urls.cat),
+        hail: await getUrlJson(fetchImpl, day1Urls.hail),
+        sighail: await getUrlJson(fetchImpl, day1Urls.sighail),
+        wind: await getUrlJson(fetchImpl, day1Urls.wind),
+        sigwind: await getUrlJson(fetchImpl, day1Urls.sigwind),
+        torn: await getUrlJson(fetchImpl, day1Urls.torn),
+        sigtorn: await getUrlJson(fetchImpl, day1Urls.sigtorn),
+        html: fixRelativeLinksInSpcHtml(
+          await getUrlText(fetchImpl, day1Urls.html),
+        ),
+      }
+    : undefined;
+
+  const day2 = day2Urls
+    ? {
+        cat: await getUrlJson(fetchImpl, day2Urls.cat),
+        hail: await getUrlJson(fetchImpl, day2Urls.hail),
+        sighail: await getUrlJson(fetchImpl, day2Urls.sighail),
+        wind: await getUrlJson(fetchImpl, day2Urls.wind),
+        sigwind: await getUrlJson(fetchImpl, day2Urls.sigwind),
+        torn: await getUrlJson(fetchImpl, day2Urls.torn),
+        sigtorn: await getUrlJson(fetchImpl, day2Urls.sigtorn),
+        html: fixRelativeLinksInSpcHtml(
+          await getUrlText(fetchImpl, day2Urls.html),
+        ),
+      }
+    : undefined;
+
+  const day3 = day3Urls
+    ? {
+        cat: await getUrlJson(fetchImpl, day3Urls.cat),
+        prob: await getUrlJson(fetchImpl, day3Urls.prob),
+        sigprob: await getUrlJson(fetchImpl, day3Urls.sigprob),
+        html: fixRelativeLinksInSpcHtml(
+          await getUrlText(fetchImpl, day3Urls.html),
+        ),
+      }
+    : undefined;
+
+  const day4 = day4Urls
+    ? {
+        prob: await getUrlJson(fetchImpl, day4Urls.prob),
+        html: fixRelativeLinksInSpcDay45678Html(
+          extractDay45678Table(await getUrlText(fetchImpl, day4Urls.html)),
+        ),
+      }
+    : undefined;
+  const day5 = day5Urls
+    ? {
+        prob: await getUrlJson(fetchImpl, day5Urls.prob),
+        html: fixRelativeLinksInSpcDay45678Html(
+          extractDay45678Table(await getUrlText(fetchImpl, day5Urls.html)),
+        ),
+      }
+    : undefined;
+  const day6 = day6Urls
+    ? {
+        prob: await getUrlJson(fetchImpl, day6Urls.prob),
+        html: fixRelativeLinksInSpcDay45678Html(
+          extractDay45678Table(await getUrlText(fetchImpl, day6Urls.html)),
+        ),
+      }
+    : undefined;
+  const day7 = day7Urls
+    ? {
+        prob: await getUrlJson(fetchImpl, day7Urls.prob),
+        html: fixRelativeLinksInSpcDay45678Html(
+          extractDay45678Table(await getUrlText(fetchImpl, day7Urls.html)),
+        ),
+      }
+    : undefined;
+  const day8 = day8Urls
+    ? {
+        prob: await getUrlJson(fetchImpl, day8Urls.prob),
+        html: fixRelativeLinksInSpcDay45678Html(
+          extractDay45678Table(await getUrlText(fetchImpl, day8Urls.html)),
+        ),
+      }
+    : undefined;
+
+  const alerts: Alert[] = [];
+
+  const day1Levels = day1
+    ? {
+        cat: findHighestCatRisk({
+          fc: day1.cat ?? featureCollection([]),
+          lat: config.lat,
+          lon: config.lon,
+        }),
+        torn: findHighestTornRisk({
+          fc: day1.torn ?? featureCollection([]),
+          lat: config.lat,
+          lon: config.lon,
+        }),
+        hail: findHighestHailWindRisk({
+          fc: day1.hail ?? featureCollection([]),
+          lat: config.lat,
+          lon: config.lon,
+        }),
+        wind: findHighestHailWindRisk({
+          fc: day1.wind ?? featureCollection([]),
+          lat: config.lat,
+          lon: config.lon,
+        }),
+        sigtorn: findHighestSigRisk({
+          fc: day1.sigtorn ?? featureCollection([]),
+          lat: config.lat,
+          lon: config.lon,
+        }),
+        sighail: findHighestSigRisk({
+          fc: day1.sighail ?? featureCollection([]),
+          lat: config.lat,
+          lon: config.lon,
+        }),
+        sigwind: findHighestSigRisk({
+          fc: day1.sigwind ?? featureCollection([]),
+          lat: config.lat,
+          lon: config.lon,
+        }),
+      }
+    : undefined;
+
+  if (day1?.html && day1Levels?.cat) {
+    alerts.push({
+      nwsId: day1Urls?.html ?? "spc-day1",
+      event: "SPC Convective Outlook Day 1",
+      headline: `SPC Conv Day 1 - ${day1Levels.cat} T${day1Levels.torn ?? ""}${
+        day1Levels.sigtorn ? "*" : ""
+      } H${day1Levels.hail ?? ""}${day1Levels.sighail ? "*" : ""} W${
+        day1Levels.wind ?? ""
+      }${day1Levels.sigwind ? "*" : ""}`,
+      description: day1.html,
+      sent: new Date(now.toISOString()),
+      source: "spc-convective-outlook",
+      extra: {
+        day: 1,
+        levels: day1Levels,
+        urls: day1Urls,
+      },
+    });
+  }
+
+  const day2Levels = day2
+    ? {
+        cat: findHighestCatRisk({
+          fc: day2.cat ?? featureCollection([]),
+          lat: config.lat,
+          lon: config.lon,
+        }),
+        torn: findHighestTornRisk({
+          fc: day2.torn ?? featureCollection([]),
+          lat: config.lat,
+          lon: config.lon,
+        }),
+        hail: findHighestHailWindRisk({
+          fc: day2.hail ?? featureCollection([]),
+          lat: config.lat,
+          lon: config.lon,
+        }),
+        wind: findHighestHailWindRisk({
+          fc: day2.wind ?? featureCollection([]),
+          lat: config.lat,
+          lon: config.lon,
+        }),
+        sigtorn: findHighestSigRisk({
+          fc: day2.sigtorn ?? featureCollection([]),
+          lat: config.lat,
+          lon: config.lon,
+        }),
+        sighail: findHighestSigRisk({
+          fc: day2.sighail ?? featureCollection([]),
+          lat: config.lat,
+          lon: config.lon,
+        }),
+        sigwind: findHighestSigRisk({
+          fc: day2.sigwind ?? featureCollection([]),
+          lat: config.lat,
+          lon: config.lon,
+        }),
+      }
+    : undefined;
+
+  if (day2?.html && day2Levels?.cat) {
+    alerts.push({
+      nwsId: day2Urls?.html ?? "spc-day2",
+      event: "SPC Convective Outlook Day 2",
+      headline: `SPC Conv Day 2 - ${day2Levels.cat} T${day2Levels.torn ?? ""}${
+        day2Levels.sigtorn ? "*" : ""
+      } H${day2Levels.hail ?? ""}${day2Levels.sighail ? "*" : ""} W${
+        day2Levels.wind ?? ""
+      }${day2Levels.sigwind ? "*" : ""}`,
+      description: day2.html,
+      sent: new Date(now.toISOString()),
+      source: "spc-convective-outlook",
+      extra: {
+        day: 2,
+        levels: day2Levels,
+        urls: day2Urls,
+      },
+    });
+  }
+
+  const day3Levels = day3
+    ? {
+        cat: findHighestCatRisk({
+          fc: day3.cat ?? featureCollection([]),
+          lat: config.lat,
+          lon: config.lon,
+        }),
+        prob: findHighestHailWindRisk({
+          fc: day3.prob ?? featureCollection([]),
+          lat: config.lat,
+          lon: config.lon,
+        }),
+        sigprob: findHighestSigRisk({
+          fc: day3.sigprob ?? featureCollection([]),
+          lat: config.lat,
+          lon: config.lon,
+        }),
+      }
+    : undefined;
+
+  if (day3?.html && day3Levels?.cat) {
+    alerts.push({
+      nwsId: day3Urls?.html ?? "spc-day3",
+      event: "SPC Convective Outlook Day 3",
+      headline: `SPC Conv Day 3 - ${day3Levels.cat} P${day3Levels.prob ?? ""}${
+        day3Levels.sigprob ? "*" : ""
+      }`,
+      description: day3.html,
+      sent: new Date(now.toISOString()),
+      source: "spc-convective-outlook",
+      extra: {
+        day: 3,
+        levels: day3Levels,
+        urls: day3Urls,
+      },
+    });
+  }
+
+  const day45678Levels = async (
+    dayNum: number,
+    data?: SPC_CONV_OUTLOOK_DAY_45678_FEATURES,
+    urls?: SPC_CONV_OUTLOOK_DAY_45678,
+  ) => {
+    if (!data?.html) return;
+    const prob = findHighestHailWindRisk({
+      fc: data.prob ?? featureCollection([]),
+      lat: config.lat,
+      lon: config.lon,
+    });
+    if (!prob) return;
+    alerts.push({
+      nwsId: urls?.html ?? `spc-day${dayNum}`,
+      event: `SPC Convective Outlook Day ${dayNum}`,
+      headline: `SPC Conv Day ${dayNum} - P${prob}`,
+      description: data.html,
+      sent: new Date(now.toISOString()),
+      source: "spc-convective-outlook",
+      extra: {
+        day: dayNum,
+        levels: { prob },
+        urls,
+      },
+    });
+  };
+
+  await day45678Levels(4, day4, day4Urls);
+  await day45678Levels(5, day5, day5Urls);
+  await day45678Levels(6, day6, day6Urls);
+  await day45678Levels(7, day7, day7Urls);
+  await day45678Levels(8, day8, day8Urls);
+
+  logger.info("spc-convective-outlook:alerts", { count: alerts.length });
+
+  return {
+    alerts,
+    raw: {
+      day1,
+      day2,
+      day3,
+      day4,
+      day5,
+      day6,
+      day7,
+      day8,
+    },
+    meta: {
+      issuedAt: now.toISOString(),
+    },
+    dedupeKeys: alerts.map((alert) => alert.nwsId),
+  };
+};

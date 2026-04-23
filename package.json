@@ -1,0 +1,22 @@
+{
+  "name": "wx-modules",
+  "private": true,
+  "engines": {
+    "node": "24.x",
+    "npm": ">=10.0.0"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run --workspaces --include-workspace-root=false build",
+    "test": "npm run --workspaces --include-workspace-root=false test",
+    "lint": "npm run --workspaces --include-workspace-root=false lint"
+  },
+  "devDependencies": {
+    "tsup": "^8.0.2",
+    "typescript": "^5.5.4",
+    "vitest": "^2.0.5",
+    "@types/node": "^20.14.12"
+  }
+}

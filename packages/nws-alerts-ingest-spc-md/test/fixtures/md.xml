@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <item>
+      <title>MD 1234</title>
+      <guid>md-1234</guid>
+      <pubDate>Sat, 01 Jun 2024 01:00:00 GMT</pubDate>
+      <description><![CDATA[<pre>
+LAT...LON 36009500 36009600 37009600 37009500 36009500
+</pre>]]></description>
+    </item>
+  </channel>
+</rss>

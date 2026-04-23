@@ -1,0 +1,33 @@
+{
+  "name": "nws-alerts-ingest-spc-md",
+  "version": "0.1.0",
+  "engines": {
+    "node": "24.x",
+    "npm": ">=10.0.0"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts",
+    "test": "vitest run",
+    "lint": "echo 'no lint configured'"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^4.4.0",
+    "moment-timezone": "^0.5.45",
+    "nws-alerts-ingest-core": "*"
+  },
+  "devDependencies": {
+    "rollup": "^4.57.1"
+  }
+}

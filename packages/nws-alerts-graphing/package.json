@@ -1,0 +1,32 @@
+{
+  "name": "nws-alerts-graphing",
+  "version": "0.1.0",
+  "engines": {
+    "node": "24.x",
+    "npm": ">=10.0.0"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts",
+    "test": "vitest run",
+    "lint": "echo 'no lint configured'"
+  },
+  "dependencies": {
+    "chart.js": "^4.5.1",
+    "chartjs-node-canvas": "^5.0.0",
+    "chartjs-plugin-annotation": "^3.0.1",
+    "date-fns": "^3.6.0",
+    "date-fns-tz": "^3.1.3"
+  }
+}
