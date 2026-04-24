@@ -35,7 +35,7 @@ The shared `Alert` shape is defined in `packages/nws-alerts-ingest-core`.
 - Format: GeoJSON + HTML
 - Inputs: `lat`, `lon`, issue-time window (derived from `now`)
 - Output: Alerts for each day where a matching outlook window is active and risk levels include the point.
-- Notes: Issue-time windows follow the logic in `nwsAlerts/src/services/Spc.ts`. Risk levels are derived from SPC labels (e.g., `SLGT`, `MDT`, `HIGH`, `0.15`, `SIGN`).
+- Notes: Issue-time windows follow the logic in `nwsAlerts/src/services/Spc.ts`. Risk levels are derived from SPC labels (e.g., `SLGT`, `MDT`, `HIGH`, `0.15`, `CIG1`, `CIG2`, `CIG3`; Day 3 legacy `SIGN` may still appear during transition).
 
 ### WPC Excessive Rainfall Outlook (Day 1–5)
 - Sources:

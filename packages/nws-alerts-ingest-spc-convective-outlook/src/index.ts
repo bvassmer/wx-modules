@@ -47,6 +47,9 @@ const SPC_RISKS = {
   FOURTY_FIVE_PERCENT: "0.45",
   SIXTY_PERCENT: "0.60",
   SIGN: "SIGN",
+  CIG1: "CIG1",
+  CIG2: "CIG2",
+  CIG3: "CIG3",
   THUNDERSTORM: "TSTM",
   MARGINAL: "MRGL",
   SLIGHT: "SLGT",
@@ -151,6 +154,29 @@ const generateOutlookSearchTimes = (referenceNow: moment.Moment) => {
   };
 };
 
+const normalizeSpcGeoJsonType = ({
+  day,
+  type,
+}: {
+  day: number;
+  type: string;
+}) => {
+  if (day <= 2) {
+    switch (type) {
+      case SPC_CONV_DAY_12_OUTLOOK_TYPE.SIGNIFICANT_TORNADO:
+        return "cigtorn";
+      case SPC_CONV_DAY_12_OUTLOOK_TYPE.SIGNIFICANT_HAIL:
+        return "cighail";
+      case SPC_CONV_DAY_12_OUTLOOK_TYPE.SIGNIFICANT_WIND:
+        return "cigwind";
+      default:
+        return type;
+    }
+  }
+
+  return type;
+};
+
 const getSpcConvDay123GeoJsonUrl = ({
   day,
   time,
@@ -162,6 +188,7 @@ const getSpcConvDay123GeoJsonUrl = ({
   type: string;
   now: moment.Moment;
 }) => {
+  const geoJsonType = normalizeSpcGeoJsonType({ day, type });
   if (time === "0100") {
     return `https://www.spc.noaa.gov/products/outlook/archive/${now
       .clone()
@@ -173,7 +200,7 @@ const getSpcConvDay123GeoJsonUrl = ({
       .month(now.month())
       .date(now.date())
       .add(1, "day")
-      .format("YYYYMMDD")}_${time}_${type}.lyr.geojson`;
+      .format("YYYYMMDD")}_${time}_${geoJsonType}.lyr.geojson`;
   }
   return `https://www.spc.noaa.gov/products/outlook/archive/${now
     .clone()
@@ -183,7 +210,7 @@ const getSpcConvDay123GeoJsonUrl = ({
     .year(now.year())
     .month(now.month())
     .date(now.date())
-    .format("YYYYMMDD")}_${time}_${type}.lyr.geojson`;
+    .format("YYYYMMDD")}_${time}_${geoJsonType}.lyr.geojson`;
 };
 
 const getSpcConvDay45678GeoJsonUrl = ({
@@ -666,35 +693,102 @@ const findHighestHailWindRisk = ({
 };
 
 /**
- * Detects whether a location is in a significant severe risk area (`SIGN`).
+ * Detects the highest local SPC conditional intensity group for a location.
  */
-const findHighestSigRisk = ({
-  fc,
+const findHighestCigRisk = ({
+  fcs,
   lat,
   lon,
 }: {
-  fc: FeatureCollection;
+  fcs: Array<FeatureCollection | undefined>;
   lat: number;
   lon: number;
 }) => {
   const found = {
+    [SPC_RISKS.CIG1]: false,
+    [SPC_RISKS.CIG2]: false,
+    [SPC_RISKS.CIG3]: false,
     [SPC_RISKS.SIGN]: false,
   };
   const myPoint = point([lon, lat]);
-  featureEach(fc, (feature) => {
-    const feat = feature as Feature & {
-      geometry: { coordinates: Position[][][] };
-    };
-    if (feat?.geometry?.coordinates?.length) {
-      const poly = polygon(feat.geometry.coordinates as Position[][]);
-      if (poly && booleanPointInPolygon(myPoint, poly)) {
-        found[feat.properties?.LABEL] = true;
+  fcs.forEach((fc) => {
+    featureEach(fc ?? featureCollection([]), (feature) => {
+      const feat = feature as Feature & {
+        geometry: { coordinates: Position[][][] };
+      };
+      if (feat?.geometry?.coordinates?.length) {
+        const poly = polygon(feat.geometry.coordinates as Position[][]);
+        if (poly && booleanPointInPolygon(myPoint, poly)) {
+          const label = feat.properties?.LABEL;
+          if (label in found) {
+            found[label] = true;
+          }
+        }
       }
-    }
+    });
   });
 
+  if (found[SPC_RISKS.CIG3]) return SPC_RISKS.CIG3;
+  if (found[SPC_RISKS.CIG2]) return SPC_RISKS.CIG2;
+  if (found[SPC_RISKS.CIG1]) return SPC_RISKS.CIG1;
   if (found[SPC_RISKS.SIGN]) return SPC_RISKS.SIGN;
   return null;
+};
+
+const getSpcCigStars = (risk: string | null | undefined) => {
+  switch (risk) {
+    case SPC_RISKS.CIG3:
+      return "***";
+    case SPC_RISKS.CIG2:
+      return "**";
+    case SPC_RISKS.CIG1:
+    case SPC_RISKS.SIGN:
+      return "*";
+    default:
+      return "";
+  }
+};
+
+const buildSpcDay12Headline = ({
+  day,
+  levels,
+}: {
+  day: 1 | 2;
+  levels:
+    | SPC_CONV_OUTLOOK_DAY_12
+    | {
+        cat?: string | null;
+        torn?: string | null;
+        hail?: string | null;
+        wind?: string | null;
+        sigtorn?: string | null;
+        sighail?: string | null;
+        sigwind?: string | null;
+      }
+    | undefined;
+}) => {
+  return `SPC Conv Day ${day} - ${levels?.cat ?? "N/A"} T${
+    levels?.torn ?? ""
+  }${getSpcCigStars(levels?.sigtorn)} H${levels?.hail ?? ""}${getSpcCigStars(
+    levels?.sighail,
+  )} W${levels?.wind ?? ""}${getSpcCigStars(levels?.sigwind)}`;
+};
+
+const buildSpcDay3Headline = ({
+  levels,
+}: {
+  levels:
+    | SPC_CONV_OUTLOOK_DAY_3
+    | {
+        cat?: string | null;
+        prob?: string | null;
+        sigprob?: string | null;
+      }
+    | undefined;
+}) => {
+  return `SPC Conv Day 3 - ${levels?.cat ?? "N/A"} P${levels?.prob ?? ""}${getSpcCigStars(
+    levels?.sigprob,
+  )}`;
 };
 
 /**
@@ -921,18 +1015,18 @@ export const ingest = async (
           lat: sourceLocation.lat,
           lon: sourceLocation.lon,
         }),
-        sigtorn: findHighestSigRisk({
-          fc: day1.sigtorn ?? featureCollection([]),
+        sigtorn: findHighestCigRisk({
+          fcs: [day1.sigtorn, day1.torn],
           lat: sourceLocation.lat,
           lon: sourceLocation.lon,
         }),
-        sighail: findHighestSigRisk({
-          fc: day1.sighail ?? featureCollection([]),
+        sighail: findHighestCigRisk({
+          fcs: [day1.sighail, day1.hail],
           lat: sourceLocation.lat,
           lon: sourceLocation.lon,
         }),
-        sigwind: findHighestSigRisk({
-          fc: day1.sigwind ?? featureCollection([]),
+        sigwind: findHighestCigRisk({
+          fcs: [day1.sigwind, day1.wind],
           lat: sourceLocation.lat,
           lon: sourceLocation.lon,
         }),
@@ -943,11 +1037,7 @@ export const ingest = async (
     alerts.push({
       nwsId: day1Urls?.html ?? "spc-day1",
       event: "SPC Convective Outlook Day 1",
-      headline: `SPC Conv Day 1 - ${day1Levels.cat} T${day1Levels.torn ?? ""}${
-        day1Levels.sigtorn ? "*" : ""
-      } H${day1Levels.hail ?? ""}${day1Levels.sighail ? "*" : ""} W${
-        day1Levels.wind ?? ""
-      }${day1Levels.sigwind ? "*" : ""}`,
+      headline: buildSpcDay12Headline({ day: 1, levels: day1Levels }),
       description: day1.html,
       shortDescription:
         buildShortDescriptionFromDescription(day1.html, {
@@ -987,18 +1077,18 @@ export const ingest = async (
           lat: sourceLocation.lat,
           lon: sourceLocation.lon,
         }),
-        sigtorn: findHighestSigRisk({
-          fc: day2.sigtorn ?? featureCollection([]),
+        sigtorn: findHighestCigRisk({
+          fcs: [day2.sigtorn, day2.torn],
           lat: sourceLocation.lat,
           lon: sourceLocation.lon,
         }),
-        sighail: findHighestSigRisk({
-          fc: day2.sighail ?? featureCollection([]),
+        sighail: findHighestCigRisk({
+          fcs: [day2.sighail, day2.hail],
           lat: sourceLocation.lat,
           lon: sourceLocation.lon,
         }),
-        sigwind: findHighestSigRisk({
-          fc: day2.sigwind ?? featureCollection([]),
+        sigwind: findHighestCigRisk({
+          fcs: [day2.sigwind, day2.wind],
           lat: sourceLocation.lat,
           lon: sourceLocation.lon,
         }),
@@ -1009,11 +1099,7 @@ export const ingest = async (
     alerts.push({
       nwsId: day2Urls?.html ?? "spc-day2",
       event: "SPC Convective Outlook Day 2",
-      headline: `SPC Conv Day 2 - ${day2Levels.cat} T${day2Levels.torn ?? ""}${
-        day2Levels.sigtorn ? "*" : ""
-      } H${day2Levels.hail ?? ""}${day2Levels.sighail ? "*" : ""} W${
-        day2Levels.wind ?? ""
-      }${day2Levels.sigwind ? "*" : ""}`,
+      headline: buildSpcDay12Headline({ day: 2, levels: day2Levels }),
       description: day2.html,
       shortDescription:
         buildShortDescriptionFromDescription(day2.html, {
@@ -1043,8 +1129,8 @@ export const ingest = async (
           lat: sourceLocation.lat,
           lon: sourceLocation.lon,
         }),
-        sigprob: findHighestSigRisk({
-          fc: day3.sigprob ?? featureCollection([]),
+        sigprob: findHighestCigRisk({
+          fcs: [day3.sigprob, day3.prob],
           lat: sourceLocation.lat,
           lon: sourceLocation.lon,
         }),
@@ -1055,9 +1141,7 @@ export const ingest = async (
     alerts.push({
       nwsId: day3Urls?.html ?? "spc-day3",
       event: "SPC Convective Outlook Day 3",
-      headline: `SPC Conv Day 3 - ${day3Levels.cat} P${day3Levels.prob ?? ""}${
-        day3Levels.sigprob ? "*" : ""
-      }`,
+      headline: buildSpcDay3Headline({ levels: day3Levels }),
       description: day3.html,
       shortDescription:
         buildShortDescriptionFromDescription(day3.html, {
