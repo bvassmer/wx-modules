@@ -174,6 +174,10 @@ const normalizeSpcGeoJsonType = ({
     }
   }
 
+  if (day === 3 && type === SPC_CONV_DAY_3_OUTLOOK_TYPE.SIGNIFICANT_PROB) {
+    return "cigprob";
+  }
+
   return type;
 };
 

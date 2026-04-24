@@ -9,6 +9,8 @@
 
 - If a package change affects ingestion behavior, redeploy the consumer on `nws`, typically `nwsAlerts`.
 - If a package change affects UI or API behavior, rebuild and redeploy the corresponding service from `weather-llm-iac`.
+- `wx-modules` changes still ship through the consumer repo's Git-based Pi deploy flow: push the package change and the consumer repo change to GitHub, then redeploy the consumer from its live Git checkout on the target Pi.
+- Do not copy built package files directly onto a Pi; use the consumer repo's deploy wrapper so the runtime checkout stays Git-backed and reproducible.
 
 ## Validation
 

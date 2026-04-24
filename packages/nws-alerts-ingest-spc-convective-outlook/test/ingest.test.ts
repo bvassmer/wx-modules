@@ -154,7 +154,7 @@ describe("spc-convective-outlook ingest", () => {
             json: async () => buildFeatureCollection("ENH"),
           } as Response;
         }
-        if (url.includes("day3") && url.includes("_sigprob")) {
+        if (url.includes("day3") && url.includes("_cigprob")) {
           return {
             ok: true,
             json: async () => buildFeatureCollection(["CIG1", "CIG2"]),
@@ -178,6 +178,7 @@ describe("spc-convective-outlook ingest", () => {
       (alert) => alert.event === "SPC Convective Outlook Day 3",
     );
 
+    expect((day3Alert?.extra as any)?.urls?.sigprob).toContain("cigprob");
     expect(day3Alert?.headline).toBe("SPC Conv Day 3 - ENH P0.30**");
   });
 });
